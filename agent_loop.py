@@ -16,7 +16,7 @@ class BugBountyAgent:
         self.target = target
         self.max_steps = max_steps
 
-        self.password = os.getenv("KALI_PASSWORD")
+        self.password = os.getenv("KALI_SSH_PASSWORD")
 
         # LLMs
         self.planner = get_planner()
@@ -91,8 +91,36 @@ class BugBountyAgent:
             print(result["error"])
             return None
 
-        return result["output"]
+        output = result["output"]
 
+        
+        if len(output) > 1500 or "[truncated]" in output.lower():
+            print("\n[INFO] Large output detected")
+
+            self.context += """
+    NOTE:
+    The previous command produced large output.
+
+    Do NOT read full output.
+    Instead:
+    - Use head for preview
+    - Use jq for JSON
+    - Use sed for partial reading
+    """
+
+        
+        if command.startswith("ffuf"):
+            print("[INFO] ffuf detected")
+
+            self.context += """
+    NOTE:
+    ffuf outputs should be saved as JSON.
+
+    Next step:
+    Use 'jq' to extract results from result.json
+    """
+
+        return output
     # ---------------------------
     # Analysis Step
     # ---------------------------
@@ -119,7 +147,7 @@ class BugBountyAgent:
 
         self.context += f"""
 Command: {command}
-Analysis: {analysis}
+Analysis Summary: {analysis}
 """
 
         # prevent context explosion

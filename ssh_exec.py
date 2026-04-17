@@ -16,6 +16,9 @@ class SSHExecutor:
         "pwd",
         "cat",
         "gau",
+        "jq",
+        "head",
+        "sed",
     ]
 
     BLOCKED_PATTERNS = [
@@ -87,6 +90,20 @@ class SSHExecutor:
             return output[:MAX_LEN] + "\n...[truncated]"
 
         return output
+
+
+    def read_file_head(self, filepath: str, lines: int = 100):
+        command = f"head -n {lines} {filepath}"
+        return self.run_command(command)
+    
+    def read_file_chunk(self, filepath: str, start: int, size: int = 100):
+        end = start + size
+        command = f"sed -n '{start},{end}p' {filepath}"
+        return self.run_command(command)
+    
+    def read_json_chunk(self, filepath: str, limit: int = 20):
+        command = f"jq '.results[:{limit}]' {filepath}"
+        return self.run_command(command)
     # ---------------------------
     # Execution
     # ---------------------------
