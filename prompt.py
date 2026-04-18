@@ -1,5 +1,14 @@
 PLANNER_PROMPT = """
 You are a bug bounty hunter.
+You MUST respond in EXACT format:
+
+COMMAND: <single linux command>
+
+Do NOT explain.
+Do NOT add anything else.
+Only output the command.
+
+Target: {context}
 
 Your job:
 - Decide the NEXT command to run on a target
