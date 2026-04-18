@@ -63,8 +63,9 @@ class BugBountyAgent:
     def plan_next_step(self) -> str | None:
         prompt = PLANNER_PROMPT.format(context=self.context)
 
-        response = self.planner(prompt)
-
+        response = self.planner.invoke(prompt)
+        if hasattr(response, "content"):
+            response = response.content
         command = self.extract_command(response)
 
         print("\n[PLANNER RAW OUTPUT]")
@@ -126,7 +127,9 @@ class BugBountyAgent:
     # ---------------------------
     def analyze_output(self, output: str) -> str:
         analyzer_input = f"{ANALYZER_PROMPT}\n\n{output}"
-        analyzed = self.analyzer(analyzer_input)
+        analyzed = self.analyzer.invoke(analyzer_input)
+        if hasattr(analyzed, "content"):
+            analyzed = analyzed.content
 
         print("\n[ANALYZED OUTPUT]")
         print(analyzed)
@@ -195,8 +198,15 @@ Analysis Summary: {analysis}
 # Entry Point
 # ---------------------------
 if __name__ == "__main__":
+
+    try:
+        input_tar = input("Enter target domain (default: example.com): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\nUsing default target...")
+        input_tar = ""
+    target = input_tar if input_tar else "example.com"
     agent = BugBountyAgent(
-        target="example.com",
+        target=target,
         max_steps=5
     )
 
