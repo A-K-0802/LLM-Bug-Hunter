@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Any
 
 
 class FindingsStore:
@@ -37,7 +38,7 @@ class FindingsStore:
         self.data["subdomains"] = sorted(current)
         self.save()
 
-    def add_alive_hosts(self, hosts: list[str]):
+    def add_alive_hosts(self, hosts: list[Any]):
         current = self.data.get("alive_hosts", [])
         seen_hosts = {h.get("host", "").strip().lower() for h in current if isinstance(h, dict)}
 

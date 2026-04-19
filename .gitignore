@@ -15,6 +15,7 @@ env/
 .coverage
 dist/
 build/
+reports/
 
 # IDE/OS
 .vscode/
