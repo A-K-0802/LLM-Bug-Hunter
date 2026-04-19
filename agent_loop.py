@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from ssh_exec import SSHExecutor
 from llm import get_planner, get_analyser
 from prompt import PLANNER_PROMPT, ANALYZER_PROMPT
+from phases import PHASE_SEQUENCE, PHASE_NAMES, PHASE_OBJECTIVES, PHASE_TOOLS
 
 load_dotenv()
 
@@ -33,15 +34,96 @@ class BugBountyAgent:
         # Memory
         self.executed_commands: List[str] = []
         self.history: List[Dict] = []
+        self.executed_command_signatures: set[str] = set()
+        self.current_phase_index = 0
+        self.pending_phase_complete = False
+        self.subfinder_output_saved = False
 
         # Context buffer
         self.context = f"Target: {self.target}\n"
+
+    def _subfinder_output_path(self) -> str:
+        return f"recon/{self.target}/subfinder.txt"
 
     def connect(self):
         self.ssh.connect()
 
     def close(self):
         self.ssh.close()
+
+    def get_current_phase(self) -> str:
+        return PHASE_SEQUENCE[self.current_phase_index]
+
+    def get_current_phase_name(self) -> str:
+        phase = self.get_current_phase()
+        return PHASE_NAMES.get(phase, phase)
+
+    def get_current_phase_objective(self) -> str:
+        phase = self.get_current_phase()
+        return PHASE_OBJECTIVES.get(phase, "")
+
+    def get_current_phase_tools(self) -> List[str]:
+        phase = self.get_current_phase()
+        return PHASE_TOOLS.get(phase, [])
+
+    def _advance_phase(self):
+        if self.current_phase_index >= len(PHASE_SEQUENCE) - 1:
+            return
+        self.current_phase_index += 1
+        print(f"[PHASE] Advancing to: {self.get_current_phase_name()}")
+
+    def _extract_phase_complete(self, text: str) -> bool:
+        match = re.search(r"(?im)^\s*phase_complete\s*:\s*(true|false)\s*$", text)
+        return bool(match and match.group(1).lower() == "true")
+
+    def _command_primary_tool(self, command: str) -> str:
+        command = command.strip()
+        if not command:
+            return ""
+        return command.split()[0].lower()
+
+    def _normalize_command(self, command: str) -> str:
+        normalized = command.strip().lower()
+        normalized = re.sub(r"\s*\|\s*", " | ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized
+
+    def _is_subfinder_save_command(self, command: str) -> bool:
+        expected = f"subfinder -d {self.target} -silent -o {self._subfinder_output_path()}"
+        return self._normalize_command(command) == self._normalize_command(expected)
+
+    def _references_only_target_scope(self, command: str) -> bool:
+        # Reject explicit external domains. Keep localhost/private/internal literals out of scope checks.
+        domains = re.findall(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b", command.lower())
+        if not domains:
+            return True
+
+        target = self.target.lower().strip()
+        file_like_suffixes = (
+            ".txt",
+            ".json",
+            ".md",
+            ".log",
+            ".yaml",
+            ".yml",
+            ".csv",
+            ".xml",
+        )
+        for domain in domains:
+            if domain.endswith(file_like_suffixes):
+                continue
+            if domain == target or domain.endswith(f".{target}"):
+                continue
+            return False
+        return True
+
+    def _is_phase_allowed(self, command: str) -> bool:
+        primary = self._command_primary_tool(command)
+        return primary in self.get_current_phase_tools()
+
+    def _allowed_prefix_pattern(self) -> str:
+        escaped = [re.escape(cmd) for cmd in self.ssh.ALLOWED_COMMANDS]
+        return "(?:" + "|".join(escaped) + ")"
 
     # ---------------------------
     # Parsing Utilities
@@ -56,7 +138,7 @@ class BugBountyAgent:
             return match.group(1).strip()
 
         # Fallback: if the model outputs a bare command line, accept it.
-        allowed_prefix = r"(?:subfinder|gau|mkdir|ls|cat|head|sed|jq)"
+        allowed_prefix = self._allowed_prefix_pattern()
         for raw_line in text.splitlines():
             line = raw_line.strip().strip("`")
             if re.match(rf"(?i)^\s*{allowed_prefix}\b", line):
@@ -75,38 +157,53 @@ class BugBountyAgent:
     def _is_valid_planner_command(self, command: str) -> bool:
         if not command:
             return False
-        if command in self.executed_commands:
+        signature = self._normalize_command(command)
+        if signature in self.executed_command_signatures:
+            return False
+        if not self._references_only_target_scope(command):
+            return False
+        if not self._is_phase_allowed(command):
             return False
         if self.ssh._is_blocked(command):
             return False
         if not self.ssh._is_allowed(command):
             return False
+
+        # Subdomain phase must persist subfinder output before allowing preview loops.
+        if self.get_current_phase() == "subdomain_enum":
+            if command.startswith("subfinder"):
+                if self.subfinder_output_saved:
+                    return False
+                if not self._is_subfinder_save_command(command):
+                    return False
+
         return True
 
     def _repair_planner_output(self, raw_output: str) -> str | None:
         repair_prompt = f"""
-You previously returned an invalid planner output.
+                You previously returned an invalid planner output.
 
-Allowed tools:
-subfinder, gau, ls, cat, head, sed, jq
+                Current phase: {self.get_current_phase_name()}
+                Allowed tools for this phase:
+                {', '.join(self.get_current_phase_tools())}
 
-Return exactly one line in this format:
-COMMAND: <single linux command>
+                Return exactly one line in this format:
+                COMMAND: <single linux command>
 
-Do not output anything else.
-Do not ask questions.
-Do not request more context.
+                Do not output anything else.
+                Do not ask questions.
+                Do not request more context.
 
-Context:
-{self.context}
+                Context:
+                {self.context}
 
-Previous invalid output:
-{raw_output}
-"""
+                Previous invalid output:
+                {raw_output}
+                """
 
-        repaired = self.planner.invoke(repair_prompt)
-        if hasattr(repaired, "content"):
-            repaired = repaired.content
+        repaired = self.planner(repair_prompt)
+        repaired = getattr(repaired, "content", repaired)
+        repaired = repaired if isinstance(repaired, str) else str(repaired)
 
         print("\n[PLANNER REPAIR RAW OUTPUT]")
         print(repaired)
@@ -120,29 +217,73 @@ Previous invalid output:
         """
         Deterministic safe fallback if planner output is invalid.
         """
-        candidates = [
-            f"mkdir -p recon/{self.target}",
-            f"subfinder -d {self.target} -silent | head -n 50",
-            f"subfinder -d {self.target} -silent -o recon/{self.target}/subfinder.txt",
-            f"gau {self.target} | head -n 100",
-            f"gau {self.target} | sed -n '1,120p'",
-            "ls",
-        ]
+        phase = self.get_current_phase()
+        candidates_by_phase = {
+            "subdomain_enum": [
+                f"mkdir -p recon/{self.target}",
+                f"subfinder -d {self.target} -silent -o recon/{self.target}/subfinder.txt",
+                f"cat recon/{self.target}/subfinder.txt | head -n 50",
+            ],
+            "url_enum": [
+                f"gau {self.target} | head -n 100",
+                f"gau {self.target} | sed -n '1,120p'",
+                f"waybackurls {self.target} | head -n 100",
+            ],
+            "live_host_validation": [
+                f"cat recon/{self.target}/subfinder.txt | httpx -silent | head -n 100",
+                f"cat recon/{self.target}/subfinder.txt | sort -u | head -n 100",
+            ],
+            "attack_surface_map": [
+                f"cat recon/{self.target}/subfinder.txt | head -n 20",
+                f"curl -s https://{self.target} | head -n 40",
+                "ls",
+            ],
+        }
+        candidates = candidates_by_phase.get(phase, ["ls"])
 
         for cmd in candidates:
             if self._is_valid_planner_command(cmd):
                 return cmd
         return None
 
+    def _auto_advance_phase(self, command: str) -> bool:
+        phase = self.get_current_phase()
+        if phase == "subdomain_enum" and self._is_subfinder_save_command(command):
+            self.subfinder_output_saved = True
+            print("[PHASE] Subdomain output saved, advancing phase.")
+            self._advance_phase()
+            self.pending_phase_complete = False
+            return True
+
+        if phase == "url_enum" and (command.startswith("gau") or command.startswith("waybackurls")):
+            print("[PHASE] URL enumeration signal detected, advancing phase.")
+            self._advance_phase()
+            self.pending_phase_complete = False
+            return True
+
+        if phase == "live_host_validation" and command.startswith("httpx"):
+            print("[PHASE] Live host validation signal detected, advancing phase.")
+            self._advance_phase()
+            self.pending_phase_complete = False
+            return True
+
+        return False
+
     # ---------------------------
     # Planner Step
     # ---------------------------
     def plan_next_step(self) -> str | None:
-        prompt = PLANNER_PROMPT.format(context=self.context)
+        prompt = PLANNER_PROMPT.format(
+            phase=self.get_current_phase_name(),
+            phase_objective=self.get_current_phase_objective(),
+            allowed_tools=", ".join(self.get_current_phase_tools()),
+            context=self.context,
+        )
 
         response = self.planner(prompt)
         response = getattr(response, "content", response)
         response = response if isinstance(response, str) else str(response)
+        self.pending_phase_complete = self._extract_phase_complete(response)
         command = self.extract_command(response)
 
         print("\n[PLANNER RAW OUTPUT]")
@@ -179,6 +320,10 @@ Previous invalid output:
 
         output = result["output"]
 
+        # Detect persisted subdomain output command even if it has no stdout.
+        if self._is_subfinder_save_command(command) and result.get("exit_code", 1) == 0:
+            self.subfinder_output_saved = True
+
         
         if len(output) > 1500 or "[truncated]" in output.lower():
             print("\n[INFO] Large output detected")
@@ -211,7 +356,8 @@ Previous invalid output:
     # Analysis Step
     # ---------------------------
     def analyze_output(self, output: str) -> str:
-        analyzer_input = f"{ANALYZER_PROMPT}\n\n{output}"
+        analyzer_prompt = ANALYZER_PROMPT.format(phase=self.get_current_phase_name())
+        analyzer_input = f"{analyzer_prompt}\n\n{output}"
         analyzed = self.analyzer(analyzer_input)
         analyzed = getattr(analyzed, "content", analyzed)
         analyzed = analyzed if isinstance(analyzed, str) else str(analyzed)
@@ -232,6 +378,7 @@ Previous invalid output:
 
         self.history.append(entry)
         self.executed_commands.append(command)
+        self.executed_command_signatures.add(self._normalize_command(command))
 
         self.context += f"""
 Command: {command}
@@ -250,6 +397,7 @@ Analysis Summary: {analysis}
         self.connect()
 
         try:
+            print(f"[PHASE] Starting: {self.get_current_phase_name()}")
             for step in range(self.max_steps):
                 print(f"\n========== STEP {step + 1} ==========")
 
@@ -273,6 +421,11 @@ Analysis Summary: {analysis}
 
                 # 4. Update memory/context
                 self.update_context(command, analysis)
+                auto_advanced = self._auto_advance_phase(command)
+
+                if self.pending_phase_complete and not auto_advanced:
+                    self.pending_phase_complete = False
+                    self._advance_phase()
 
         finally:
             self.close()

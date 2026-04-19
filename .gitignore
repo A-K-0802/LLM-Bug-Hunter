@@ -22,3 +22,8 @@ build/
 *.log
 Thumbs.db
 Desktop.ini
+
+LLM_Bug_Hunter_Plan.docx
+LLM_Bug_Hunter_Plan.zip
+docx_extract/
+docx_extract_tmp/

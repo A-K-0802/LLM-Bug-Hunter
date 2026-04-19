@@ -13,6 +13,14 @@ class SSHExecutor:
     ALLOWED_COMMANDS = [
         "subfinder",
         "gau",
+        "httpx",
+        "nmap",
+        "ffuf",
+        "nuclei",
+        "waybackurls",
+        "curl",
+        "grep",
+        "sort",
         "mkdir",
         "ls",
         "pwd",
@@ -120,6 +128,14 @@ class SSHExecutor:
                 timeout = 180   # 3 minutes
             elif command.startswith("gau"):
                 timeout = 180   # 3 minutes
+            elif command.startswith("httpx"):
+                timeout = 180
+            elif command.startswith("nmap"):
+                timeout = 300
+            elif command.startswith("ffuf"):
+                timeout = 300
+            elif command.startswith("nuclei"):
+                timeout = 300
             else:
                 timeout = 60    # default
 
