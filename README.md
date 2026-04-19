@@ -70,14 +70,14 @@ Execute targeted, non-destructive scans based on Phase 4's attack map.
 Install dependencies:
 
 ```powershell
-D:/Python/python.exe -m pip install paramiko python-dotenv langchain langchain-community langchain-huggingface huggingface_hub
+D:/Python/python.exe -m pip install paramiko python-dotenv langchain langchain-community langchain-huggingface huggingface_hub groq
 ```
 
 Create a `.env` file in project root:
 
 ```env
 KALI_SSH_PASSWORD=your_kali_password
-HUGGINGFACE_API_KEY=your_hf_token
+GROQ_API_KEY=your_hf_token
 ```
 
 ## Prerequisites for Kali VM
