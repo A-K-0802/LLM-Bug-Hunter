@@ -1,3 +1,5 @@
+import shlex
+
 import paramiko
 from paramiko import SSHClient
 
@@ -11,6 +13,7 @@ class SSHExecutor:
     ALLOWED_COMMANDS = [
         "subfinder",
         "gau",
+        "mkdir",
         "ls",
         "pwd",
         "cat",
@@ -138,7 +141,10 @@ class SSHExecutor:
             }
 
         try:
-            _stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+            # Run through an interactive zsh so the remote session loads the same
+            # PATH and shell startup files as your working terminal.
+            wrapped_command = f"zsh -ic {shlex.quote(command)}"
+            _stdin, stdout, stderr = self.client.exec_command(wrapped_command, timeout=timeout)
 
             raw_output = stdout.read().decode(errors="replace")
             

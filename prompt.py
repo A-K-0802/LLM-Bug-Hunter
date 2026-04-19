@@ -7,7 +7,7 @@ Task:
 - Prefer small, incremental reconnaissance steps.
 
 Allowed tools:
-subfinder, gau, ls, cat, head, sed, jq
+subfinder, gau, mkdir, ls, cat, head, sed, jq
 
 Hard rules:
 - Output exactly one line.
@@ -33,12 +33,16 @@ Target and context:
 Command policy:
 - If this is the first useful recon step, prefer subdomain/URL discovery.
 - Prefer subfinder first, then gau for follow-up URL enumeration.
+- If you need to organize results, create a target folder with mkdir -p before saving outputs.
+- For recon commands that support it, prefer writing results to a file with -o.
 - For large outputs, use head or sed to inspect a small preview.
 - If the context already contains a command, do not repeat it.
 - If unsure, still choose one safe recon command.
 
 Examples:
 COMMAND: subfinder -d punchzee.com -silent | head -n 50
+COMMAND: mkdir -p recon/punchzee.com
+COMMAND: subfinder -d punchzee.com -silent -o recon/punchzee.com/subfinder.txt
 COMMAND: gau punchzee.com | head -n 100
 COMMAND: gau punchzee.com | sed -n '1,120p'
 """

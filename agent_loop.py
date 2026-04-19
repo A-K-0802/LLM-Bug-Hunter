@@ -56,7 +56,7 @@ class BugBountyAgent:
             return match.group(1).strip()
 
         # Fallback: if the model outputs a bare command line, accept it.
-        allowed_prefix = r"(?:subfinder|gau|ls|cat|head|sed|jq)"
+        allowed_prefix = r"(?:subfinder|gau|mkdir|ls|cat|head|sed|jq)"
         for raw_line in text.splitlines():
             line = raw_line.strip().strip("`")
             if re.match(rf"(?i)^\s*{allowed_prefix}\b", line):
@@ -121,7 +121,9 @@ Previous invalid output:
         Deterministic safe fallback if planner output is invalid.
         """
         candidates = [
+            f"mkdir -p recon/{self.target}",
             f"subfinder -d {self.target} -silent | head -n 50",
+            f"subfinder -d {self.target} -silent -o recon/{self.target}/subfinder.txt",
             f"gau {self.target} | head -n 100",
             f"gau {self.target} | sed -n '1,120p'",
             "ls",
@@ -138,9 +140,9 @@ Previous invalid output:
     def plan_next_step(self) -> str | None:
         prompt = PLANNER_PROMPT.format(context=self.context)
 
-        response = self.planner.invoke(prompt)
-        if hasattr(response, "content"):
-            response = response.content
+        response = self.planner(prompt)
+        response = getattr(response, "content", response)
+        response = response if isinstance(response, str) else str(response)
         command = self.extract_command(response)
 
         print("\n[PLANNER RAW OUTPUT]")
@@ -167,10 +169,13 @@ Previous invalid output:
     def execute_command(self, command: str) -> str | None:
         result = self.ssh.run_command(command)
 
-        if result["error"]:
+        if result["error"] and result.get("exit_code", 1) != 0:
             print("\n[EXECUTION ERROR]")
             print(result["error"])
             return None
+        elif result["error"]:
+            print("\n[EXECUTION WARNING]")
+            print(result["error"])
 
         output = result["output"]
 
@@ -207,9 +212,9 @@ Previous invalid output:
     # ---------------------------
     def analyze_output(self, output: str) -> str:
         analyzer_input = f"{ANALYZER_PROMPT}\n\n{output}"
-        analyzed = self.analyzer.invoke(analyzer_input)
-        if hasattr(analyzed, "content"):
-            analyzed = analyzed.content
+        analyzed = self.analyzer(analyzer_input)
+        analyzed = getattr(analyzed, "content", analyzed)
+        analyzed = analyzed if isinstance(analyzed, str) else str(analyzed)
 
         print("\n[ANALYZED OUTPUT]")
         print(analyzed)
