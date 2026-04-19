@@ -1,0 +1,219 @@
+Phase System Design
+The agent will move through 5 phases in order. Each phase has a clear objective, a set of allowed tools, and a completion condition that the LLM signals explicitly.
+Phase 1: Subdomain Enumeration
+Phase 2: Alive Check & Tech Fingerprinting  
+Phase 3: Endpoint & Parameter Discovery
+Phase 4: Attack Surface Mapping
+Phase 5: Vulnerability Scanning
+The planner prompt will always know which phase it's in, what the goal is, and what tools it can use in that phase. This prevents the LLM from jumping ahead (e.g. running nuclei before knowing which hosts are alive).
+
+Phase 1 — Subdomain Enumeration
+Goal: Find every subdomain associated with the target.
+Tools:
+
+subfinder — passive subdomain discovery via APIs
+assetfinder — finds related domains and subdomains
+amass — deeper passive enumeration (use enum -passive only, no active scanning)
+head / sed — preview large outputs
+sort -u — deduplicate results
+
+Example commands the LLM should produce:
+bashsubfinder -d target.com -silent | sort -u | head -n 100
+assetfinder --subs-only target.com | sort -u
+amass enum -passive -d target.com -timeout 5
+cat subfinder_out.txt assetfinder_out.txt | sort -u > all_subdomains.txt
+Completion condition: LLM outputs PHASE_COMPLETE: true when it has a deduplicated subdomain list saved to a file and no new subdomains are being discovered.
+What gets saved to findings.json:
+json"subdomains": ["api.target.com", "admin.target.com", "dev.target.com"]
+
+Phase 2 — Alive Check & Tech Fingerprinting
+Goal: From all discovered subdomains, find which ones are actually live, what ports they expose, and what technology stack they run.
+Tools:
+
+httpx — probes HTTP/HTTPS, grabs status codes, titles, tech stack, server headers
+nmap -sT (TCP connect, no sudo needed) — port scanning on alive hosts
+curl -I — grab headers from specific endpoints
+grep — filter httpx output for interesting status codes
+cat / head / sed — file inspection
+
+Example commands:
+bashhttpx -l all_subdomains.txt -silent -status-code -title -tech-detect -o httpx_out.txt
+cat httpx_out.txt | grep -E "200|301|302|403|401"
+nmap -sT -p 80,443,8080,8443,3000,5000,9000 api.target.com
+curl -I https://admin.target.com
+What httpx output looks like (LLM needs to parse this):
+https://api.target.com [200] [API Gateway] [nginx] [Laravel]
+https://admin.target.com [403] [Admin Panel] [Apache]
+https://dev.target.com [200] [Dev Environment] [Express]
+Completion condition: LLM has a filtered list of alive hosts with their tech stack identified.
+What gets saved:
+json"alive_hosts": [
+  {"host": "api.target.com", "status": 200, "tech": ["nginx", "Laravel"], "ports": [443]},
+  {"host": "admin.target.com", "status": 403, "tech": ["Apache"], "ports": [80, 443]}
+]
+
+Phase 3 — Endpoint & Parameter Discovery
+Goal: For each alive host, find all accessible endpoints, parameters, and files.
+Tools:
+
+gau — pulls URLs from Wayback Machine, Common Crawl, OTX
+waybackurls — focused Wayback Machine URL fetch
+ffuf — directory and parameter fuzzing
+grep — filter for interesting extensions and patterns
+sed / head — manage large output
+
+Example commands:
+bashgau target.com | sort -u > gau_urls.txt
+waybackurls target.com | sort -u >> gau_urls.txt
+cat gau_urls.txt | grep -E "\.(php|asp|aspx|jsp|json|xml|env|git|bak|sql)"
+cat gau_urls.txt | grep "?" | sort -u > parameterized_urls.txt
+ffuf -u https://api.target.com/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc 200,301,302,403 -o ffuf_out.txt
+The LLM should specifically look for:
+
+URLs with parameters (?id=, ?user=, ?file=, ?redirect=)
+Sensitive file extensions (.env, .git, .sql, .bak, .config)
+API patterns (/api/v1/, /api/v2/, /graphql, /rest/)
+Admin paths (/admin, /dashboard, /manager, /console)
+
+Completion condition: parameterized URLs and interesting endpoints saved, directory fuzzing done on high-value hosts.
+What gets saved:
+json"endpoints": {
+  "parameterized": ["https://api.target.com/user?id=1", "https://target.com/search?q=test"],
+  "sensitive_files": ["https://dev.target.com/.env"],
+  "api_endpoints": ["https://api.target.com/v1/users", "https://api.target.com/v1/admin"],
+  "admin_panels": ["https://admin.target.com/dashboard"]
+}
+
+Phase 4 — Attack Surface Mapping
+Goal: No new tool execution in this phase. The LLM reasons over everything collected so far and produces a structured attack plan.
+Tools: None (this is a pure reasoning phase — no SSH commands)
+How it works: You pass the entire findings.json to a dedicated ATTACK_SURFACE_PROMPT and ask the LLM to classify every finding into attack categories with specific test plans.
+Attack surface categories the LLM should map to:
+CategoryWhat triggers itTests to suggestIDOR/api/v1/users?id=1 type URLsIncrement ID, swap user IDs, test without authSQLiParameters in PHP/ASP pages', ' OR 1=1--, time-based blindOpen Redirect?redirect=, ?url=, ?next= paramsRedirect to external domainSSRF?url=, ?endpoint=, file fetch paramsPoint to internal IPs, AWS metadataAuth Bypass403 admin panels, login pagesDefault creds, JWT manipulation, path traversalExposed Secrets.env, .git, .config filesDirect fetch, git log enumerationSubdomain TakeoverSubdomains with NXDOMAIN or unclaimed servicesCheck CNAME targetsXSSSearch/comment/input parametersBasic <script>alert(1)</script>API Misconfig/graphql, /api/ endpointsIntrospection query, missing auth check
+Output format for this phase:
+ATTACK_SURFACE: IDOR
+TARGET: https://api.target.com/v1/users?id=1
+SEVERITY: High
+ATTACK_PLAN:
+  1. Send GET /v1/users/1, then /v1/users/2, check if other user data leaks
+  2. Try request with no Authorization header
+  3. Try negative IDs and UUIDs
+  4. Try BOLA: access /v1/users/2 while authenticated as user 1
+
+Phase 5 — Vulnerability Scanning
+Goal: Run targeted, non-destructive scans based on Phase 4's attack map.
+Tools:
+
+nuclei — template-based scanner (use only safe passive/detect templates)
+curl — manual verification of specific findings
+grep — parse nuclei output
+
+Example commands:
+bashnuclei -l alive_hosts.txt -t exposures/ -t misconfiguration/ -t takeovers/ -severity low,medium,high -o nuclei_out.txt
+nuclei -u https://api.target.com -t vulnerabilities/generic/ -o nuclei_api.txt
+curl -s https://dev.target.com/.env
+curl -s https://api.target.com/v1/users/2 -H "Authorization: Bearer <token_from_phase3>"
+Nuclei template categories to allow (safe ones only):
+
+exposures/ — finds exposed files, secrets, config
+misconfiguration/ — security header issues, CORS, open redirects
+takeovers/ — subdomain takeover detection
+technologies/ — tech fingerprinting
+vulnerabilities/generic/ — common CVEs and logic issues
+
+NOT allowed (too aggressive / destructive): fuzzing/, brute-force/, dos/
+Completion condition: nuclei scan complete, curl verifications done on highest priority targets.
+
+How to Implement the Phase System in Code
+In agent_loop.py, add this to __init__:
+pythonself.phases = [
+    "subdomain_enum",
+    "alive_check", 
+    "fingerprint",
+    "attack_surface_map",
+    "vuln_scan"
+]
+self.current_phase = 0
+self.phase_steps = {phase: 0 for phase in self.phases}
+self.max_steps_per_phase = 5  # LLM gets 5 attempts per phase
+Phase objectives dict (pass into prompt):
+pythonPHASE_OBJECTIVES = {
+    "subdomain_enum": "Discover all subdomains. Save deduplicated list to all_subdomains.txt",
+    "alive_check": "Probe all subdomains with httpx. Identify alive hosts, status codes, tech stack.",
+    "fingerprint": "Enumerate endpoints, parameters, and sensitive files on alive hosts.",
+    "attack_surface_map": "Analyze all findings and produce a structured attack plan per surface.",
+    "vuln_scan": "Run nuclei and targeted curl checks on mapped attack surfaces."
+}
+Phase advancement logic — add this method:
+pythondef check_phase_advance(self, analysis: str) -> bool:
+    if "PHASE_COMPLETE: true" in analysis:
+        if self.current_phase < len(self.phases) - 1:
+            self.current_phase += 1
+            print(f"\n[PHASE] Advancing to: {self.phases[self.current_phase]}")
+            return True
+    return False
+Update the planner prompt call:
+pythonphase_name = self.phases[self.current_phase]
+prompt = PLANNER_PROMPT.format(
+    context=self.context,
+    phase=phase_name,
+    phase_objective=PHASE_OBJECTIVES[phase_name],
+    allowed_tools=PHASE_TOOLS[phase_name]  # per-phase tool list
+)
+Update the main loop:
+pythondef run(self):
+    self.connect()
+    try:
+        for step in range(self.max_steps * len(self.phases)):
+            phase_name = self.phases[self.current_phase]
+            print(f"\n=== STEP {step+1} | PHASE: {phase_name} ===")
+            
+            if phase_name == "attack_surface_map":
+                self.run_attack_surface_phase()  # no SSH, just LLM reasoning
+                self.current_phase += 1
+                continue
+            
+            command = self.plan_next_step()
+            if not command:
+                self.current_phase += 1  # stuck, force advance
+                continue
+                
+            output = self.execute_command(command)
+            if output is None:
+                continue
+                
+            analysis = self.analyze_output(output)
+            self.update_context(command, analysis)
+            self.check_phase_advance(analysis)
+            
+            if self.current_phase >= len(self.phases):
+                break
+    finally:
+        self.close()
+        self.generate_final_report()
+
+Updated PLANNER_PROMPT structure
+pythonPLANNER_PROMPT = """
+You are an autonomous bug bounty recon agent operating in a restricted SSH environment.
+
+Current Phase: {phase}
+Phase Objective: {phase_objective}
+
+Allowed tools for this phase:
+{allowed_tools}
+
+Hard rules:
+- Output exactly: COMMAND: <single linux command>
+- Optionally on the next line: PHASE_COMPLETE: true  (only when objective is fully done)
+- Never repeat an already-executed command.
+- Never use tools outside the allowed list for this phase.
+- Do not use sudo.
+
+Context and findings so far:
+{context}
+"""
+
+Files to Add
+Beyond agent_loop.py and prompt.py, you'll want two new files:
+phases.py — holds PHASE_TOOLS, PHASE_OBJECTIVES, and PHASE_TOOLS dicts cleanly separated from agent logic.
+findings.py — a small class that handles loading, updating, and saving findings.json, with methods like add_subdomains(), add_alive_host(), add_endpoint(), add_attack_surface().

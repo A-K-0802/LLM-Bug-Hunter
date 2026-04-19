@@ -12,6 +12,7 @@ class SSHExecutor:
     # Allowed tools for the agent
     ALLOWED_COMMANDS = [
         "subfinder",
+        "assetfinder",
         "gau",
         "httpx",
         "nmap",
@@ -126,6 +127,8 @@ class SSHExecutor:
         if timeout is None:
             if command.startswith("subfinder"):
                 timeout = 180   # 3 minutes
+            elif command.startswith("assetfinder"):
+                timeout = 180
             elif command.startswith("gau"):
                 timeout = 180   # 3 minutes
             elif command.startswith("httpx"):

@@ -1,0 +1,20 @@
+{
+  "subdomains": [
+    "api.punchzee.com",
+    "app.punchzee.com",
+    "cdn.punchzee.com",
+    "files.punchzee.com",
+    "forum.punchzee.com",
+    "forums.punchzee.com",
+    "get.punchzee.com",
+    "learn.punchzee.com",
+    "mta-sts.punchzee.com",
+    "status.punchzee.com",
+    "support.punchzee.com",
+    "www.punchzee.com"
+  ],
+  "alive_hosts": [],
+  "endpoints": {},
+  "attack_surfaces": [],
+  "vuln_scan_results": []
+}

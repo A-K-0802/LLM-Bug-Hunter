@@ -1,42 +1,46 @@
 PHASE_SEQUENCE = [
     "subdomain_enum",
-    "url_enum",
-    "live_host_validation",
+    "alive_check",
+    "fingerprint",
     "attack_surface_map",
+    "vuln_scan",
 ]
 
 
 PHASE_NAMES = {
     "subdomain_enum": "Subdomain Enumeration",
-    "url_enum": "URL and Endpoint Enumeration",
-    "live_host_validation": "Live Host Validation",
+    "alive_check": "Alive Check and Tech Fingerprinting",
+    "fingerprint": "Endpoint and Parameter Discovery",
     "attack_surface_map": "Attack Surface Mapping",
+    "vuln_scan": "Vulnerability Scanning",
 }
 
 
 PHASE_OBJECTIVES = {
-    "subdomain_enum": "Discover and save subdomains for the target.",
-    "url_enum": "Enumerate historical and discovered URLs/endpoints from known domains.",
-    "live_host_validation": "Identify which discovered hosts are alive and reachable.",
-    "attack_surface_map": "Map candidate attack surfaces and run focused scans.",
+    "subdomain_enum": "Discover all subdomains and save a deduplicated list to recon/<target>/all_subdomains.txt.",
+    "alive_check": "Probe all subdomains with httpx and identify alive hosts with status and tech stack.",
+    "fingerprint": "Enumerate endpoints, parameters, and sensitive paths from alive hosts.",
+    "attack_surface_map": "Analyze findings only and output a structured attack map. No SSH command execution.",
+    "vuln_scan": "Run targeted, non-destructive nuclei/curl checks based on mapped attack surfaces.",
 }
 
 
 PHASE_TOOLS = {
-    "subdomain_enum": ["subfinder", "mkdir", "ls", "cat", "head", "sed", "sort", "grep", "jq"],
-    "url_enum": ["gau", "waybackurls", "cat", "head", "sed", "sort", "grep", "jq", "ls"],
-    "live_host_validation": ["httpx", "cat", "head", "sed", "sort", "grep", "jq", "ls"],
-    "attack_surface_map": [
-        "nmap",
-        "nuclei",
-        "ffuf",
-        "curl",
+    "subdomain_enum": [
+        "subfinder",
+        "assetfinder",
+        "mkdir",
         "cat",
         "head",
         "sed",
         "sort",
         "grep",
-        "jq",
         "ls",
     ],
+    "alive_check": ["httpx", "nmap", "curl", "grep", "cat", "head", "sed", "sort", "ls"],
+    "fingerprint": ["gau", "waybackurls", "ffuf", "grep", "sed", "head", "cat", "sort", "ls"],
+    "attack_surface_map": [
+        # Pure reasoning phase (no SSH tools).
+    ],
+    "vuln_scan": ["nuclei", "curl", "grep", "cat", "head", "sed", "ls"],
 }
