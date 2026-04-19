@@ -22,7 +22,7 @@ def get_analyser():
     # )
     return Ollama(
         model="phi",
-        temperature=0.3
+        temperature=0.1
     )
 
 def get_planner():
@@ -40,5 +40,5 @@ def get_planner():
     # )
     return Ollama(
         model="phi",
-        temperature=0.2
+        temperature=0.1
     )

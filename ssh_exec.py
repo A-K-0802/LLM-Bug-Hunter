@@ -9,13 +9,11 @@ class SSHExecutorError(Exception):
 class SSHExecutor:
     # Allowed tools for the agent
     ALLOWED_COMMANDS = [
-        "nmap",
-        "ffuf",
-        "curl",
+        "subfinder",
+        "gau",
         "ls",
         "pwd",
         "cat",
-        "gau",
         "jq",
         "head",
         "sed",
@@ -115,10 +113,10 @@ class SSHExecutor:
             raise SSHExecutorError("Command cannot be empty.")
 
         if timeout is None:
-            if command.startswith("ffuf"):
-                timeout = 900   # 15 minutes
-            elif command.startswith("nmap"):
-                timeout = 300   # 5 minutes
+            if command.startswith("subfinder"):
+                timeout = 180   # 3 minutes
+            elif command.startswith("gau"):
+                timeout = 180   # 3 minutes
             else:
                 timeout = 60    # default
 

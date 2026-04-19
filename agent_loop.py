@@ -48,13 +48,88 @@ class BugBountyAgent:
     # ---------------------------
     def extract_command(self, text: str) -> str | None:
         """
-        Extract command using regex for robustness.
-        Expected format:
-        COMMAND: <command>
+        Extract command from a planner response.
+        Accepts minor formatting variations like extra spaces or casing.
         """
-        match = re.search(r"COMMAND:\s*(.+)", text)
+        match = re.search(r"(?im)^\s*command\s*:\s*(.+?)\s*$", text)
         if match:
             return match.group(1).strip()
+
+        # Fallback: if the model outputs a bare command line, accept it.
+        allowed_prefix = r"(?:subfinder|gau|ls|cat|head|sed|jq)"
+        for raw_line in text.splitlines():
+            line = raw_line.strip().strip("`")
+            if re.match(rf"(?i)^\s*{allowed_prefix}\b", line):
+                return line
+
+        # Fallback: extract a quoted command from narrative text.
+        quoted_match = re.search(
+            rf'"\s*({allowed_prefix}[^"\n]*)\s*"',
+            text,
+            flags=re.IGNORECASE,
+        )
+        if quoted_match:
+            return quoted_match.group(1).strip()
+        return None
+
+    def _is_valid_planner_command(self, command: str) -> bool:
+        if not command:
+            return False
+        if command in self.executed_commands:
+            return False
+        if self.ssh._is_blocked(command):
+            return False
+        if not self.ssh._is_allowed(command):
+            return False
+        return True
+
+    def _repair_planner_output(self, raw_output: str) -> str | None:
+        repair_prompt = f"""
+You previously returned an invalid planner output.
+
+Allowed tools:
+subfinder, gau, ls, cat, head, sed, jq
+
+Return exactly one line in this format:
+COMMAND: <single linux command>
+
+Do not output anything else.
+Do not ask questions.
+Do not request more context.
+
+Context:
+{self.context}
+
+Previous invalid output:
+{raw_output}
+"""
+
+        repaired = self.planner.invoke(repair_prompt)
+        if hasattr(repaired, "content"):
+            repaired = repaired.content
+
+        print("\n[PLANNER REPAIR RAW OUTPUT]")
+        print(repaired)
+
+        repaired_cmd = self.extract_command(repaired)
+        if repaired_cmd and self._is_valid_planner_command(repaired_cmd):
+            return repaired_cmd
+        return None
+
+    def _build_fallback_command(self) -> str | None:
+        """
+        Deterministic safe fallback if planner output is invalid.
+        """
+        candidates = [
+            f"subfinder -d {self.target} -silent | head -n 50",
+            f"gau {self.target} | head -n 100",
+            f"gau {self.target} | sed -n '1,120p'",
+            "ls",
+        ]
+
+        for cmd in candidates:
+            if self._is_valid_planner_command(cmd):
+                return cmd
         return None
 
     # ---------------------------
@@ -71,15 +146,20 @@ class BugBountyAgent:
         print("\n[PLANNER RAW OUTPUT]")
         print(response)
 
-        if not command:
-            print("Planner failed to produce a valid command.")
-            return None
+        if command and self._is_valid_planner_command(command):
+            return command
 
-        if command in self.executed_commands:
-            print("Duplicate command detected. Stopping execution.")
-            return None
+        fallback = self._build_fallback_command()
+        if fallback:
+            print("[INFO] Using deterministic fallback command.")
+            return fallback
 
-        return command
+        repaired = self._repair_planner_output(response)
+        if repaired:
+            return repaired
+
+        print("Planner failed to produce a valid command.")
+        return None
 
     # ---------------------------
     # Execution Step
@@ -110,15 +190,15 @@ class BugBountyAgent:
     """
 
         
-        if command.startswith("ffuf"):
-            print("[INFO] ffuf detected")
+        if command.startswith("subfinder") or command.startswith("gau"):
+            print("[INFO] Recon enumeration command detected")
 
             self.context += """
     NOTE:
-    ffuf outputs should be saved as JSON.
+    Enumeration output may be large.
 
     Next step:
-    Use 'jq' to extract results from result.json
+    Use 'head' or 'sed' to inspect a subset of lines.
     """
 
         return output

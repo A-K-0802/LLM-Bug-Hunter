@@ -57,10 +57,10 @@ ssh_tool = Tool(
 Use this tool to execute Linux commands on a Kali machine.
 
 Useful for:
-- running nmap scans
-- directory brute forcing (ffuf)
+- running subdomain discovery (subfinder)
+- URL enumeration (gau)
 - checking files (ls, cat)
-- making HTTP requests (curl)
+- previewing large outputs (head, sed)
 
 Input: a single shell command string
 """
