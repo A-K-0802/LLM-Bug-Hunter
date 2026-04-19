@@ -141,3 +141,15 @@ A detailed markdown report is also generated as `final_report_<target>.md`.
 - **Tool restrictions are enforced per phase** — the LLM cannot use tools outside its current phase's allowed list
 - **Command deduplication** — the agent tracks executed commands to avoid repeating reconnaissance
 - **Non-destructive scanning only** — nuclei uses safe passive/detect templates; no fuzzing or brute-force tools
+
+
+
+# Note
+
+A previously uploaded report contained publicly discoverable subdomain enumeration results generated using standard tools (e.g., subfinder). These results were obtained through passive reconnaissance techniques that do not involve any intrusive actions, exploitation attempts, or unauthorized access to systems.
+
+No harm was intended or caused to any organization. At no point were systems probed beyond legally permissible passive information gathering, and no sensitive or confidential data was accessed.
+
+The content has since been removed to avoid any potential misunderstanding or misuse. Users of this repository are expected to follow all applicable laws, respect responsible disclosure practices, and obtain proper authorization before conducting any security testing.
+
+The author does not endorse or encourage unauthorized security testing or misuse of the tools and techniques demonstrated in this project.
