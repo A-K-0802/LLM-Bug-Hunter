@@ -132,13 +132,13 @@ class SSHExecutor:
             elif command.startswith("gau"):
                 timeout = 180   # 3 minutes
             elif command.startswith("httpx"):
-                timeout = 180
+                timeout = 600   # 10 minutes
             elif command.startswith("nmap"):
-                timeout = 300
+                timeout = 900   # 15 minutes
             elif command.startswith("ffuf"):
-                timeout = 300
+                timeout = 900   # 15 minutes
             elif command.startswith("nuclei"):
-                timeout = 300
+                timeout = 900   # 15 minutes
             else:
                 timeout = 60    # default
 
